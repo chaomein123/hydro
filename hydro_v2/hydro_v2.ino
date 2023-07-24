@@ -1,5 +1,5 @@
 #include <dht.h>
-
+#include <avr/wdt.h>
 #include "functions.h"
 #include <Wire.h>
 #include <ThreeWire.h>
@@ -198,17 +198,19 @@ int NutSol_lower_threshold = 0;
 int NutSol_upper_threshold = 73;
 
 //TDS Thresholds
-int ppm_lower_threshold = 400;
-int ppm_upper_threshold = 450;
+int ppm_lower_threshold = 600;
+int ppm_upper_threshold = 850;
 int NutrientA_delay_6a_first = 100;  //Delay in ms for first time 1.125 mL/L
 int NutrientA_delay_6a_other = 10;   //Delay in ms for 0.05 ml/L
 int NutrientB_delay_6a_first = 100;  ////Delay in ms for first time 1.125 mL/L
 int NutrientB_delay_6a_other = 10;   //delay in ms for 0.05 mL
 int five_c_one_delay = 10;           //delay in ms for 0.5 L
 
+int nutsol_delay = 800; // 800ms per 1.5ml - 1 liter of water
+int nutsol_delay_titration = 266; // 266ms per 0.5ml
 //pH Thresholds
-float pH_upper_threshold = 6.5;
-float pH_lower_threshold = 5.5;
+float pH_upper_threshold = 6.2;
+float pH_lower_threshold = 5.8;
 
 int pH_down_delay_first = 1000;  //Delay in ms to add X mL of pH down solution
 int pH_down_delay_other = 10;    //Delay in ms to add 0.05 mL of pH down solution...1000ms = 1sec
@@ -278,11 +280,146 @@ volatile int flow_frequency; // Measures flow sensor pulses
 unsigned long currentTime;
 unsigned long cloopTime;
 
+/** ULTRASONIC MEASUREMENTS **/
+  //these area the measurements using ultrasonic
+  int water_level = 0;
+  String water_status_level = "low";
+  float water_res_measurements[] = {21, 20.4, 19.6, 18.5, 17.7, 17.40, 16.64, 15.82, 14.66, 13.90, 12.28, 11.83, 11.17, 10.08, 9.04, 8.54, 8, 7.26, 6.05, 5.84, 5.01, 4.31};
+  float main_res_measurements[] = {29.76, 28.96, 28.80, 28.56, 28.08, 27.48, 26.64, 26.16, 25.66, 25.24, 24.83, 24.27, 24.03, 23.58, 22.80, 22.51, 22.28, 21.56, 20.91, 20.45, 20.07, 19.54, 19.19, 18.79, 18.12, 17.57, 17.34, 16.77, 16.29, 15.83, 15.44, 14.96, 14.50, 14.04, 13.63, 12.77, 12.36, 11.93, 11.49, 11.03, 10.61, 10.24, 9.73, 9.45, 9.24, 8.45, 8.03, 7.64, 7.24, 6.85, 6.71};
+  float solutions_res_measurements[] = {15, 14.28, 12.12, 10.64, 8.57, 6.14, 5.27, 3.94};
+
+  int measureLevelSearch(float reservoir[], float captureVal, int arrSize){
+    for(int i=0; i < arrSize; i++){
+      if(i == (arrSize-1)){
+        //maximum level
+        water_level = i+1;
+        return water_level;
+      }else{
+        if(captureVal < reservoir[i] && captureVal >= reservoir[i+1]){
+          water_level = i+1;
+          return water_level;
+        }
+      }
+    }
+    return 0;
+  }
+  int checkMeasureLevel(float measurements[], int measurements_size, int container, float ultrasonic_captured_val){
+    //1-water | 2-main | 3-solutions
+    int arrSize = 0; int low = 0; int mid = 0; int high = 0;
+    switch(container){
+      case 1:
+        //water
+        low = 4;
+        mid = 16;
+        high = 21;
+        break;
+      case 2:
+        //main
+        low = 7;
+        mid = 20;
+        high = 50;
+        break;
+      case 3:
+        //solutions
+        low = 1; //1-200ml
+        mid = 4; //201-500ml
+        high = 7; //501-800ml
+        break;
+      default:
+        break;
+    };
+    if(ultrasonic_captured_val >= measurements[0]){
+      //no water
+      water_status_level = "No Water";
+      water_level = 0;
+      return water_level;
+    }else{
+      float mLS = measureLevelSearch(measurements, ultrasonic_captured_val, measurements_size);
+      if(mLS >= 0 && mLS <= low)
+        water_status_level = "LOW";
+      else if(mLS > low && mLS <= mid)
+        water_status_level = "MID";
+      else if(mLS > mid && mLS < high)
+        water_status_level = "HIGH";
+
+      return mLS;
+    }
+    return 0;
+  }
+  int water_res_calculate(){
+    int arrSize = sizeof(water_res_measurements) / sizeof(water_res_measurements[0]);
+    int liters = checkMeasureLevel(water_res_measurements, arrSize, 1, ultrasonicFilter(trigPin12,echoPin12));
+
+    Serial.print("WATER LEVEL STATUS: ");
+    Serial.println(water_status_level);
+    Serial.print("MEASURE WATER RESERVOIR: ");
+    Serial.print(liters);
+    Serial.println("liters");
+    return liters;
+  }
+  int main_res_calculate(){
+    int arrSize = sizeof(main_res_measurements) / sizeof(main_res_measurements[0]); //get array size
+    int liters = checkMeasureLevel(main_res_measurements, arrSize, 2, ultrasonicFilter(trigPin10,echoPin10));
+
+    Serial.print("WATER LEVEL STATUS: ");
+    Serial.println(water_status_level);
+    Serial.print("MEASURE MAIN RESERVOIR: ");
+    Serial.print(liters);
+    Serial.println("liters");
+    return liters;
+  }
+  int solution_a_calculate(){
+    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin8,echoPin8));
+
+    Serial.print("SOLUTION A LEVEL STATUS: ");
+    Serial.println(water_status_level);
+    Serial.print("MEASURE SOLUTION A RESERVOIR: ");
+    Serial.print(ml);
+    Serial.println("ml");
+    return ml;
+  }
+  int solution_b_calculate(){
+    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin11,echoPin11));
+
+    Serial.print("SOLUTION B LEVEL STATUS: ");
+    Serial.println(water_status_level);
+    Serial.print("MEASURE SOLUTION B RESERVOIR: ");
+    Serial.print(ml);
+    Serial.println("ml");
+    return ml;
+  }
+  int ph_up_calculate(){
+    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin6,echoPin6));
+
+    Serial.print("PH UP LEVEL STATUS: ");
+    Serial.println(water_status_level);
+    Serial.print("MEASURE PH UP RESERVOIR: ");
+    Serial.print(ml);
+    Serial.println("ml");
+    return ml;
+  }
+  int ph_down_calculate(){
+    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin9,echoPin9));
+
+    Serial.print("PH DOWN LEVEL STATUS: ");
+    Serial.println(water_status_level);
+    Serial.print("MEASURE PH DOWN RESERVOIR: ");
+    Serial.print(ml);
+    Serial.println("ml");
+    return ml;
+  }
+
+//**********************************
 
 void setup() {
   //Start Serial
   Serial.begin(9600);
   Serial3.begin(9600);  //Connection to Orange Pi
+
   Wire.begin();
   //Initialise BH1750
   //GY302.begin();
@@ -387,35 +524,122 @@ void setup() {
 
   previousDay = now.Day();
   start_day = now.Day();
+
+
+
+
   //***************************************************
 
-  /** MAIN RES CALIBRATION
-  for(int i=23; i<=50; i++){
-    Serial.println("Adding water for ");
+  //  analogWrite(lights, light_pwm); 
+  //analogWrite(lights, 255);
+  //pump(in1_27,in2_27,en _27,1); //fans
+  //controlMainPump(1);
+  
+  /**MAIN RESERVOIR CALIBRATION
+  for(int i=50; i<=50; i++){
+    Serial.print("Adding water for ");
     Serial.print(i);
     Serial.println("liters");
 
     refillAndMistingSol(1);
-    pump(in1_28,in2_28,enA_28,1);
-    delay(31000);
+    pump(in1_28,in2_28,enA_28,1); //water pump`
+    delay(31000); // 31,000 ms = 31 = seconds = 1 liter 
     pump(in1_28,in2_28,enA_28,0);
-    refillAndMistingSol(3);
+    refillAndMistingSol(0);
 
+
+    //Reading Distance
     Serial.print("Reading distance for ");
     Serial.print(i);
     Serial.println("liters");
 
     Serial.println("The distance for ");
     Serial.print(i);
-    Serial.print("liters is ");
-    Serial.println(ultrasonicFilter(trigPin10,echoPin10));  
-  }**/
-
-
-
+    ultrasonicFilter(trigPin10,echoPin10);  
+  }
+  **/
+  //controlMainPump(1);
+  //delay(60000*5);
+  //analogWrite(lights, 0);
+  
+  Serial.println("Starting in 1");
+  delay(1000);
 }
 void loop() {
+}
 
+void hydro_start(){
+  //calculate to add water maximum of 17liters
+  int maxLitersToAdd = 17;
+  int mainLevel = main_res_calculate(); //current water level in main res
+  int remainingLitersToAdd = maxLitersToAdd - mainLevel;
+  if(remainingLitersToAdd > 0){
+    refillWater(remainingLitersToAdd);
+  }
+  controlMainPump(1); //turn on and check water flow
+  controlMainPump(0); //turn off after checking waterflow
+  
+  stabilizePPM();
+  addNutSols(maxLitersToAdd);
+  stabilizePPM();
+  stabilizePH();
+}
+
+void stabilizePH(){
+  pH = GetpH();
+  while(ph <= pH_lower_threshold){
+    controlMainPump(0);
+    addPH_up(nutsol_delay_titration);
+    controlPropeller(1);
+    controlMainPump(1);
+    pH = GetpH();
+  }
+  while(ph >= pH_upper_threshold){
+    controlMainPump(0);
+    addPH_down(nutsol_delay_titration);
+    controlPropeller(1);
+    controlMainPump(1);
+    pH = GetpH();
+  }
+}
+
+void addNutSols(int liters){
+  //if liters = 0, then it will stabilize
+  ppm = GetTDS();
+  if(ppm < ppm_lower_threshold){
+    if(liters == 0){
+      while(ppm < ppm_lower_threshold){
+        controlMainPump(0);
+        addSol_A(nutsol_delay_titration);
+        controlPropeller(1);
+        addSol_B(nutsol_delay_titration);
+        controlPropeller(1);
+        controlMainPump(1);
+        ppm = GetTDS();
+      }
+    }else if(liters > 0){
+      controlMainPump(0);
+      addSol_A(nutsol_delay * liters);
+      controlPropeller(1);
+      addSol_B(nutsol_delay * liters);
+      controlPropeller(1);
+      controlMainPump(1);
+      ppm = GetTDS();
+    }
+  }else{
+    Serial.print("The system encountered a critical issue while attempting to add more nutrients to the plants. Adding additional nutrients at this stage would result in a detrimental effect, posing a higher risk of harm to the plants rather than providing any benefits.");
+  }
+}
+
+void stabilizePPM(){
+  ppm = GetTDS();
+  while (ppm > ppm_upper_threshold){
+    //ppm is more than the threshold - add water
+    refillWater(0.5);
+    controlPropeller(1);
+    controlMainPump(1);
+    ppm = GetTDS();
+  }
 }
 
 float GetpH() {
@@ -429,27 +653,27 @@ float GetpH() {
   return pH1;
 }
 
-void addPH_up(){
+void addPH_up(int time_to_delay){
   pump(in1_30,in2_30,enA_30,1); //turn ON ph-UP pump
-  delay(pH_up_delay_other); //Delay in ms to add X mL of pH up / 0.05mL for other
+  delay(time_to_delay); //Delay in ms to add X mL of pH up / 0.05mL for other
   pump(in1_30,in2_30,enA_30,0); //turn OFF ph-UP pump
 }
 
-void addPH_down(){
+void addPH_down(int time_to_delay){
   pump(in3_30,in4_30,enB_30,1); //turn ON ph-DOWN pump
-  delay(pH_up_delay_other); //Delay in ms to add X mL of pH Down / 0.05mL for other
+  delay(time_to_delay); //Delay in ms to add X mL of pH Down / 0.05mL for other
   pump(in3_30,in4_30,enB_30,0); //turn OFF ph-DOWN pump
 }
 
-void addSol_A(){
+void addSol_A(int time_to_delay){
   pump(in1_31,in2_31,enA_31,1); 
-  delay(pH_up_delay_other);
+  delay(time_to_delay);
   pump(in1_31,in2_31,enA_31,0); 
 }
 
-void addSol_B(){
+void addSol_B(int time_to_delay){
   pump(in3_31,in4_31,enB_31,1); 
-  delay(pH_up_delay_other);
+  delay(time_to_delay);
   pump(in3_31,in4_31,enB_31,0); 
 }
 
@@ -458,9 +682,15 @@ void controlMainPump(int control){
     //on
     pump(in3_28,in4_28,enB_28,1);
     delay(10000); // wait for 10 seconds to allow the water to flow to the waterflow sensor
-    if(getWaterFlow()){
+    if(getWaterFlow() <= 0){
+      //send to orange pi
+      // no water flowing
+      pump(in3_28,in4_28,enB_28,0);
+      Serial.println("Warning no waterflow. Check the system especially the pump!");
+      shutdownArduino(); //shutdown arduino
+    }else{
       //water is circulating = good
-      
+      Serial.println("Water pump is working");
     }
   }else{
     //off
@@ -471,27 +701,23 @@ void controlMainPump(int control){
 void controlPropeller(int control){
   if(control){
     //on
-
     // !IMPORTANT - ADD FUNCTION - CHECK WATER LEVEL FIRST BEFORE TURNING ON THE PROPELLER! //
     pump(in3_27,in4_27,enB_27,1); //turn ON propeller
+    analogWrite(enB_27, 110);
     delay(10000); //10 seconds to mix
     pump(in3_27,in4_27,enB_27,0); //turn OFF propeller
-
   }else{
     //off
+    pump(in3_27,in4_27,enB_27,0);
   }
 }
 
-void checkWaterLevel(int in1, int in2, int en, int trigPin, int echoPin){
-  //ultrasonicFilter - trigPin10, echoPin10
-  //to be coded
-}
-
-void refillWater(float time_to_add){
+void refillWater(float liters_to_add){
   // !IMPORTANT - ADD FUNCTION - CHECK WATER LEVEL FIRST BEFORE TURNING ON THE WATER PUMP! //
+  int secondsPerLiter = 31;
   refillAndMistingSol(1); //refill mode
   pump(in3_28,in4_28,enB_28,1); 
-  delay(time_to_add); 
+  delay(liters_to_add * (secondsPerLiter * 1000)); 
   pump(in3_28,in4_28,enB_28,0); 
   refillAndMistingSol(0); //turn off solenoids
 }
@@ -538,7 +764,9 @@ void fans(int control){
       break;
   }
 }
+
 float GetTDS() {
+  delay(5000);
   bool b = true;
   while (b) {
     static unsigned long analogSampleTimepoint = millis();
@@ -582,4 +810,8 @@ float getTemperature() {
   float chk = DHT.read11(dhtPin);
   float temperature = DHT.temperature;
   return temperature;
+}
+void shutdownArduino() {
+  wdt_enable(WDTO_15MS);  // Enable the Watchdog Timer with a short timeout
+  while (1);  // Wait for the Watchdog Timer to reset the Arduino
 }

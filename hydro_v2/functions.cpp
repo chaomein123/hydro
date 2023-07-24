@@ -97,26 +97,10 @@ void pump(int in1, int in2, int en, bool control){
     digitalWrite(in2, LOW);
     digitalWrite(en, HIGH);
   }else{
-    //Turn Pump P1 off.
+    //Turn Pump off.
     digitalWrite(in1, LOW);
     digitalWrite(in2, LOW);
     digitalWrite(en, LOW);
-  }
-}
-
-void hydro_start(int u10_trig, int u10_echo, int NutSol_lower_threshold, int NutSol_upper_threshold, int Nut_Sol_Level){
-  refillAndMistingSol(1);
-  int NutSol = UltraMeasureDistance(u10_trig, u10_echo);
-  int NutSolLevel = map(NutSol, NutSol_lower_threshold, NutSol_upper_threshold, 100, 0);
-  while (NutSolLevel < Nut_Sol_Level) {
-    //turn on HP pump
-    pump(in1_28,in2_28,enA_28,1);
-    NutSol = UltraMeasureDistance(u10_trig, u10_echo);
-    NutSolLevel = map(NutSol, NutSol_lower_threshold, NutSol_upper_threshold, 100, 0);
-  }
-  if (NutSolLevel > Nut_Sol_Level) {
-    //turn off HP pump
-    pump(in1_28,in2_28,enA_28,0);
   }
 }
 
@@ -171,6 +155,7 @@ float getWaterFlow() {
   delay(1000);  // Delay between readings (adjust as needed)**/
 }
 
+//ultrasonic distance reader
 float ultrasonicFilter(int trigPin, int echoPin){
   // Define the number of readings to average
   const int numReadings = 10;
@@ -211,7 +196,7 @@ float ultrasonicFilter(int trigPin, int echoPin){
       // Calculate the average
       filteredDistance = calculateAverage(numReadings, readings);
 
-      // Print the filtered distance
+      //Print the filtered distance
       Serial.print("Filtered Distance: ");
       Serial.print(filteredDistance);
       Serial.println(" cm");

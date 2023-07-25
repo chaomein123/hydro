@@ -239,6 +239,7 @@ int Nutrient_B_container_height = 73;  //Max distance / ultrasonic sensor max va
 int pH_down_container_height = 73;
 int pH_up_container_height = 73;
 int water_reservoir_container_height = 73;
+int solution_lower_threshold = 200; // 200 ml lowest threshold for solutions
 
 int Nut_Sol_Level = 90;  //NutSol will fill upto this %
 
@@ -396,6 +397,9 @@ void setup() {
 }
 
 void loop() {
+  // Program Logic
+  RtcDateTime now = Rtc.GetDateTime();
+
   calculateAllSensors();
   if (now.Minute() % 10 == 0) sendSensorValues(); //send Sensor every 10 minutes
   if (now.Hour() % 4 == 0) sendStatusToOrangePi(); //send status/notification every 4 hours
@@ -514,7 +518,19 @@ void calculateAllSensors(){
   pH_down_Notify_Level = ph_down_calculate();
 }
 void sendStatusToOrangePi(){
-  Serial.println("Send status/notification to orange pi.");
+  Serial.println("Sending status/notification to orange pi.");
+
+  //Your Nutrient A Solution is Running Out! Kindly refill its container
+  if(solution_a_calculate() < solution_lower_threshold) Serial3.println("a");
+  //Your Nutrient B Solution is Running Out! Kindly refill its container
+  if(solution_b_calculate() < solution_lower_threshold) Serial3.println("b");
+  //Your PH Up Solution is Running Out! Kindly refill its container
+  if(ph_up_calculate() < solution_lower_threshold) Serial3.println("u");
+  //Your PH Down Solution is Running Out! Kindly refill its container
+  if(ph_down_calculate() < solution_lower_threshold) Serial3.println("d");
+  //Your Water Reservoir is Running Out! Kindly refill its reservoir.
+  if(water_res_calculate() < 3) Serial3.println("w");
+
   //a Check Water FLow
   if (getWaterFlow() <= 0) {
     //Send to Orange Pi
@@ -598,137 +614,137 @@ void sendSensorValues(){
 
 
 /** ULTRASONIC MEASUREMENTS **/
-  //these area the measurements using ultrasonic
-  int water_level = 0;
-  String water_status_level = "low";
-  float water_res_measurements[] = {21, 20.4, 19.6, 18.5, 17.7, 17.40, 16.64, 15.82, 14.66, 13.90, 12.28, 11.83, 11.17, 10.08, 9.04, 8.54, 8, 7.26, 6.05, 5.84, 5.01, 4.31};
-  float main_res_measurements[] = {29.76, 28.96, 28.80, 28.56, 28.08, 27.48, 26.64, 26.16, 25.66, 25.24, 24.83, 24.27, 24.03, 23.58, 22.80, 22.51, 22.28, 21.56, 20.91, 20.45, 20.07, 19.54, 19.19, 18.79, 18.12, 17.57, 17.34, 16.77, 16.29, 15.83, 15.44, 14.96, 14.50, 14.04, 13.63, 12.77, 12.36, 11.93, 11.49, 11.03, 10.61, 10.24, 9.73, 9.45, 9.24, 8.45, 8.03, 7.64, 7.24, 6.85, 6.71};
-  float solutions_res_measurements[] = {15, 14.28, 12.12, 10.64, 8.57, 6.14, 5.27, 3.94};
+//these area the measurements using ultrasonic
+int water_level = 0;
+String water_status_level = "low";
+float water_res_measurements[] = {21, 20.4, 19.6, 18.5, 17.7, 17.40, 16.64, 15.82, 14.66, 13.90, 12.28, 11.83, 11.17, 10.08, 9.04, 8.54, 8, 7.26, 6.05, 5.84, 5.01, 4.31};
+float main_res_measurements[] = {29.76, 28.96, 28.80, 28.56, 28.08, 27.48, 26.64, 26.16, 25.66, 25.24, 24.83, 24.27, 24.03, 23.58, 22.80, 22.51, 22.28, 21.56, 20.91, 20.45, 20.07, 19.54, 19.19, 18.79, 18.12, 17.57, 17.34, 16.77, 16.29, 15.83, 15.44, 14.96, 14.50, 14.04, 13.63, 12.77, 12.36, 11.93, 11.49, 11.03, 10.61, 10.24, 9.73, 9.45, 9.24, 8.45, 8.03, 7.64, 7.24, 6.85, 6.71};
+float solutions_res_measurements[] = {15, 14.28, 12.12, 10.64, 8.57, 6.14, 5.27, 3.94};
 
-  int measureLevelSearch(float reservoir[], float captureVal, int arrSize){
-    for(int i=0; i < arrSize; i++){
-      if(i == (arrSize-1)){
-        //maximum level
-        water_level = i+1;
-        return water_level;
-      }else{
-        if(captureVal < reservoir[i] && captureVal >= reservoir[i+1]){
-          water_level = i+1;
-          return water_level;
-        }
-      }
-    }
-    return 0;
-  }
-  int checkMeasureLevel(float measurements[], int measurements_size, int container, float ultrasonic_captured_val){
-    //1-water | 2-main | 3-solutions
-    int arrSize = 0; int low = 0; int mid = 0; int high = 0;
-    switch(container){
-      case 1:
-        //water
-        low = 4;
-        mid = 16;
-        high = 21;
-        break;
-      case 2:
-        //main
-        low = 7;
-        mid = 20;
-        high = 50;
-        break;
-      case 3:
-        //solutions
-        low = 1; //1-200ml
-        mid = 4; //201-500ml
-        high = 7; //501-800ml
-        break;
-      default:
-        break;
-    };
-    if(ultrasonic_captured_val >= measurements[0]){
-      //no water
-      water_status_level = "No Water";
-      water_level = 0;
+int measureLevelSearch(float reservoir[], float captureVal, int arrSize){
+  for(int i=0; i < arrSize; i++){
+    if(i == (arrSize-1)){
+      //maximum level
+      water_level = i+1;
       return water_level;
     }else{
-      float mLS = measureLevelSearch(measurements, ultrasonic_captured_val, measurements_size);
-      if(mLS >= 0 && mLS <= low)
-        water_status_level = "LOW";
-      else if(mLS > low && mLS <= mid)
-        water_status_level = "MID";
-      else if(mLS > mid && mLS < high)
-        water_status_level = "HIGH";
-
-      return mLS;
+      if(captureVal < reservoir[i] && captureVal >= reservoir[i+1]){
+        water_level = i+1;
+        return water_level;
+      }
     }
-    return 0;
   }
-  int water_res_calculate(){
-    int arrSize = sizeof(water_res_measurements) / sizeof(water_res_measurements[0]);
-    int liters = checkMeasureLevel(water_res_measurements, arrSize, 1, ultrasonicFilter(trigPin12,echoPin12));
+  return 0;
+}
+int checkMeasureLevel(float measurements[], int measurements_size, int container, float ultrasonic_captured_val){
+  //1-water | 2-main | 3-solutions
+  int arrSize = 0; int low = 0; int mid = 0; int high = 0;
+  switch(container){
+    case 1:
+      //water
+      low = 4;
+      mid = 16;
+      high = 21;
+      break;
+    case 2:
+      //main
+      low = 7;
+      mid = 20;
+      high = 50;
+      break;
+    case 3:
+      //solutions
+      low = 1; //1-200ml
+      mid = 4; //201-500ml
+      high = 7; //501-800ml
+      break;
+    default:
+      break;
+  };
+  if(ultrasonic_captured_val >= measurements[0]){
+    //no water
+    water_status_level = "No Water";
+    water_level = 0;
+    return water_level;
+  }else{
+    float mLS = measureLevelSearch(measurements, ultrasonic_captured_val, measurements_size);
+    if(mLS >= 0 && mLS <= low)
+      water_status_level = "LOW";
+    else if(mLS > low && mLS <= mid)
+      water_status_level = "MID";
+    else if(mLS > mid && mLS < high)
+      water_status_level = "HIGH";
 
-    Serial.print("WATER LEVEL STATUS: ");
-    Serial.println(water_status_level);
-    Serial.print("MEASURE WATER RESERVOIR: ");
-    Serial.print(liters);
-    Serial.println("liters");
-    return liters;
+    return mLS;
   }
-  int main_res_calculate(){
-    int arrSize = sizeof(main_res_measurements) / sizeof(main_res_measurements[0]); //get array size
-    int liters = checkMeasureLevel(main_res_measurements, arrSize, 2, ultrasonicFilter(trigPin10,echoPin10));
+  return 0;
+}
+int water_res_calculate(){
+  int arrSize = sizeof(water_res_measurements) / sizeof(water_res_measurements[0]);
+  int liters = checkMeasureLevel(water_res_measurements, arrSize, 1, ultrasonicFilter(trigPin12,echoPin12));
 
-    Serial.print("WATER LEVEL STATUS: ");
-    Serial.println(water_status_level);
-    Serial.print("MEASURE MAIN RESERVOIR: ");
-    Serial.print(liters);
-    Serial.println("liters");
-    return liters;
-  }
-  int solution_a_calculate(){
-    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
-    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin8,echoPin8));
+  Serial.print("WATER LEVEL STATUS: ");
+  Serial.println(water_status_level);
+  Serial.print("MEASURE WATER RESERVOIR: ");
+  Serial.print(liters);
+  Serial.println("liters");
+  return liters;
+}
+int main_res_calculate(){
+  int arrSize = sizeof(main_res_measurements) / sizeof(main_res_measurements[0]); //get array size
+  int liters = checkMeasureLevel(main_res_measurements, arrSize, 2, ultrasonicFilter(trigPin10,echoPin10));
 
-    Serial.print("SOLUTION A LEVEL STATUS: ");
-    Serial.println(water_status_level);
-    Serial.print("MEASURE SOLUTION A RESERVOIR: ");
-    Serial.print(ml);
-    Serial.println("ml");
-    return ml;
-  }
-  int solution_b_calculate(){
-    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
-    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin11,echoPin11));
+  Serial.print("WATER LEVEL STATUS: ");
+  Serial.println(water_status_level);
+  Serial.print("MEASURE MAIN RESERVOIR: ");
+  Serial.print(liters);
+  Serial.println("liters");
+  return liters;
+}
+int solution_a_calculate(){
+  int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+  int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin8,echoPin8));
 
-    Serial.print("SOLUTION B LEVEL STATUS: ");
-    Serial.println(water_status_level);
-    Serial.print("MEASURE SOLUTION B RESERVOIR: ");
-    Serial.print(ml);
-    Serial.println("ml");
-    return ml;
-  }
-  int ph_up_calculate(){
-    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
-    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin6,echoPin6));
+  Serial.print("SOLUTION A LEVEL STATUS: ");
+  Serial.println(water_status_level);
+  Serial.print("MEASURE SOLUTION A RESERVOIR: ");
+  Serial.print(ml);
+  Serial.println("ml");
+  return ml;
+}
+int solution_b_calculate(){
+  int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+  int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin11,echoPin11));
 
-    Serial.print("PH UP LEVEL STATUS: ");
-    Serial.println(water_status_level);
-    Serial.print("MEASURE PH UP RESERVOIR: ");
-    Serial.print(ml);
-    Serial.println("ml");
-    return ml;
-  }
-  int ph_down_calculate(){
-    int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
-    int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin9,echoPin9));
+  Serial.print("SOLUTION B LEVEL STATUS: ");
+  Serial.println(water_status_level);
+  Serial.print("MEASURE SOLUTION B RESERVOIR: ");
+  Serial.print(ml);
+  Serial.println("ml");
+  return ml;
+}
+int ph_up_calculate(){
+  int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+  int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin6,echoPin6));
 
-    Serial.print("PH DOWN LEVEL STATUS: ");
-    Serial.println(water_status_level);
-    Serial.print("MEASURE PH DOWN RESERVOIR: ");
-    Serial.print(ml);
-    Serial.println("ml");
-    return ml;
-  }
+  Serial.print("PH UP LEVEL STATUS: ");
+  Serial.println(water_status_level);
+  Serial.print("MEASURE PH UP RESERVOIR: ");
+  Serial.print(ml);
+  Serial.println("ml");
+  return ml;
+}
+int ph_down_calculate(){
+  int arrSize = sizeof(solutions_res_measurements) / sizeof(solutions_res_measurements[0]);
+  int ml = checkMeasureLevel(solutions_res_measurements, arrSize, 3, ultrasonicFilter(trigPin9,echoPin9));
+
+  Serial.print("PH DOWN LEVEL STATUS: ");
+  Serial.println(water_status_level);
+  Serial.print("MEASURE PH DOWN RESERVOIR: ");
+  Serial.print(ml);
+  Serial.println("ml");
+  return ml;
+}
 
 //**********************************
 

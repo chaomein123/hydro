@@ -869,6 +869,7 @@ void controlMainPump(int control){
       //send to orange pi
       // no water flowing
       pump(in3_28,in4_28,enB_28,0);
+      Serial3.println("c"); // send to orange pi
       Serial.println("Warning no waterflow. Check the system especially the pump!");
       shutdownArduino(); //shutdown arduino
     }else{

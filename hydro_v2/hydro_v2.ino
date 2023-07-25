@@ -591,6 +591,8 @@ void sendSensorValues(){
   Serial3.print("pH down Level ");
   Serial3.print(pH_down_Notify_Level);
   Serial3.println(); 
+  //All parameters setup
+  Serial3.println("p");
 }
 /*------------------------------- **/
 

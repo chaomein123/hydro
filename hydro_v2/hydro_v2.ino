@@ -244,10 +244,10 @@ int Nut_Sol_Level = 90;  //NutSol will fill upto this %
 
 //humidity
 int humidity_lower_threshold = 50;
-int humidity_upper_threshold = 60;
+int humidity_upper_threshold = 70;
 
 //temperature
-int temperature_threshold = 22;
+int temperature_threshold = 26;
 
 //Brown disease add 1L water
 long brown_spot_delay_add_one_L_water = 1000;
@@ -583,18 +583,28 @@ void hydro_start(){
   addNutSols(maxLitersToAdd);
   stabilizePPM();
   stabilizePH();
+  controlLight(1);
+  stabilizeHum();
+  stabilizeTemp();
 }
 
+void controlLight(int control){
+  if(control){
+    analogWrite(lights, light_pwm);
+  }else{
+    analogWrite(lights, 50);
+  }
+}
 void stabilizePH(){
   pH = GetpH();
-  while(ph <= pH_lower_threshold){
+  while(pH <= pH_lower_threshold){
     controlMainPump(0);
     addPH_up(nutsol_delay_titration);
     controlPropeller(1);
     controlMainPump(1);
     pH = GetpH();
   }
-  while(ph >= pH_upper_threshold){
+  while(pH >= pH_upper_threshold){
     controlMainPump(0);
     addPH_down(nutsol_delay_titration);
     controlPropeller(1);
@@ -602,7 +612,6 @@ void stabilizePH(){
     pH = GetpH();
   }
 }
-
 void addNutSols(int liters){
   //if liters = 0, then it will stabilize
   ppm = GetTDS();
@@ -630,7 +639,6 @@ void addNutSols(int liters){
     Serial.print("The system encountered a critical issue while attempting to add more nutrients to the plants. Adding additional nutrients at this stage would result in a detrimental effect, posing a higher risk of harm to the plants rather than providing any benefits.");
   }
 }
-
 void stabilizePPM(){
   ppm = GetTDS();
   while (ppm > ppm_upper_threshold){
@@ -641,7 +649,6 @@ void stabilizePPM(){
     ppm = GetTDS();
   }
 }
-
 float GetpH() {
   int measurings = 0;
   for (int i = 0; i < samples; i++) {
@@ -652,31 +659,26 @@ float GetpH() {
   float pH1 = 7 + ((2.5 - volt) / 0.18);
   return pH1;
 }
-
 void addPH_up(int time_to_delay){
   pump(in1_30,in2_30,enA_30,1); //turn ON ph-UP pump
   delay(time_to_delay); //Delay in ms to add X mL of pH up / 0.05mL for other
   pump(in1_30,in2_30,enA_30,0); //turn OFF ph-UP pump
 }
-
 void addPH_down(int time_to_delay){
   pump(in3_30,in4_30,enB_30,1); //turn ON ph-DOWN pump
   delay(time_to_delay); //Delay in ms to add X mL of pH Down / 0.05mL for other
   pump(in3_30,in4_30,enB_30,0); //turn OFF ph-DOWN pump
 }
-
 void addSol_A(int time_to_delay){
   pump(in1_31,in2_31,enA_31,1); 
   delay(time_to_delay);
   pump(in1_31,in2_31,enA_31,0); 
 }
-
 void addSol_B(int time_to_delay){
   pump(in3_31,in4_31,enB_31,1); 
   delay(time_to_delay);
   pump(in3_31,in4_31,enB_31,0); 
 }
-
 void controlMainPump(int control){
   if(control){
     //on
@@ -697,7 +699,6 @@ void controlMainPump(int control){
     pump(in3_28,in4_28,enB_28,0);
   }
 }
-
 void controlPropeller(int control){
   if(control){
     //on
@@ -711,7 +712,6 @@ void controlPropeller(int control){
     pump(in3_27,in4_27,enB_27,0);
   }
 }
-
 void refillWater(float liters_to_add){
   // !IMPORTANT - ADD FUNCTION - CHECK WATER LEVEL FIRST BEFORE TURNING ON THE WATER PUMP! //
   int secondsPerLiter = 31;
@@ -720,14 +720,6 @@ void refillWater(float liters_to_add){
   delay(liters_to_add * (secondsPerLiter * 1000)); 
   pump(in3_28,in4_28,enB_28,0); 
   refillAndMistingSol(0); //turn off solenoids
-}
-
-void turnOnMist(){
-  refillAndMistingSol(2);
-  pump(in1_28,in2_28,enA_28,1); 
-  delay(3000); 
-  pump(in1_28,in2_28,enA_28,0); 
-  refillAndMistingSol(0);
 }
 
 void checkTemp(){
@@ -743,7 +735,6 @@ void checkTemp(){
     fans(2);//Reduce F speed
   }
 }
-
 void fans(int control){
   switch(control){
     case 0:
@@ -764,7 +755,6 @@ void fans(int control){
       break;
   }
 }
-
 float GetTDS() {
   delay(5000);
   bool b = true;
@@ -800,6 +790,59 @@ float GetTDS() {
     }
   }
   return tdsValue;
+}
+
+bool mist_control = true;
+void turnOnMist(){
+  if(mist_control){
+    refillAndMistingSol(2);
+    pump(in1_28,in2_28,enA_28,1); 
+    delay(3000); 
+    pump(in1_28,in2_28,enA_28,0); 
+    refillAndMistingSol(0);
+    mist_control = false;
+  }else{
+    pump(in1_28,in2_28,enA_28,0); 
+    refillAndMistingSol(0);
+    Serial.print("Warning: Cannot turn on mist since it has been turned on.");
+  }
+}
+void stabilizeHum(){
+  bool hum = false;
+  humidity = getHumidity();
+  fans(2);
+  Serial.print("Humidity: ");
+  Serial.println(getHumidity());
+  while(humidity > humidity_upper_threshold){
+    Serial.print("Stabilizing humidity: ");
+    Serial.println(humidity);
+    fans(1);
+    delay(5000);
+    humidity = getHumidity();
+  }
+  if(humidity > humidity_lower_threshold && mist_control){
+    Serial.print("Stabilizing humidity: ");
+    Serial.println(humidity);
+    turnOnMist();
+    delay(5000);
+    humidity = getHumidity();
+  }else{
+    Serial.print("Warning: Cannot turn on mist since it has been turned on.");
+  }
+  
+  Serial.print("Humidity: ");
+  Serial.println(getHumidity());
+}
+void stabilizeTemp(){
+  temperature = getTemperature();
+  while(temperature > temperature_threshold){
+    Serial.print("Stabilizing Temperature: ");
+    Serial.print(temperature);
+    Serial.println(" *C ");
+    fans(1);
+    delay(5000);
+    temperature = getTemperature();
+  }
 }
 float getHumidity() {
   float chk = DHT.read11(dhtPin);

@@ -250,7 +250,7 @@ int humidity_upper_threshold = 70;
 int temperature_threshold = 26;
 
 //Brown disease add 1L water
-long brown_spot_delay_add_one_L_water = 1000;
+long brown_spot_delay_add_one_L_water = 1;
 //**********************************
 int water_reservoir_Level;
 int Nutrient_A_Notify_Level;
@@ -279,6 +279,321 @@ volatile int flow_frequency; // Measures flow sensor pulses
  float vol = 0.0,l_minute;
 unsigned long currentTime;
 unsigned long cloopTime;
+
+void setup() {
+  //Start Serial
+  Serial.begin(9600);
+  Serial3.begin(9600);  //Connection to Orange Pi
+
+  Wire.begin();
+  //Initialise BH1750
+  //GY302.begin();
+  //Setup Ultrasonic sensors
+  //U6
+  pinMode(trigPin6, OUTPUT);
+  pinMode(echoPin6, INPUT);
+  //U9
+  pinMode(trigPin9, OUTPUT);
+  pinMode(echoPin9, INPUT);
+  //U8
+  pinMode(trigPin8, OUTPUT);
+  pinMode(echoPin8, INPUT);
+  //U11
+  pinMode(trigPin11, OUTPUT);
+  pinMode(echoPin11, INPUT);
+  //U12
+  pinMode(trigPin12, OUTPUT);
+  pinMode(echoPin12, INPUT);
+  //U10
+  pinMode(trigPin10, OUTPUT);
+  pinMode(echoPin10, INPUT);
+
+  //TDS
+  pinMode(TdsSensorPin, INPUT);
+
+  //Actuators
+  //Light
+  pinMode(lights, OUTPUT);
+  //Solenoids
+  //pinMode(solenoid24, OUTPUT);
+  //pinMode(solenoid35, OUTPUT);
+  pinMode(solenoid36, OUTPUT);
+
+  //Motor Driver
+  //U28
+  pinMode(in1_28, OUTPUT);
+  pinMode(in2_28, OUTPUT);
+  pinMode(in3_28, OUTPUT);
+  pinMode(in4_28, OUTPUT);
+  pinMode(enA_28, OUTPUT);
+  pinMode(enB_28, OUTPUT);
+
+  //U27
+  pinMode(in1_27, OUTPUT);
+  pinMode(in2_27, OUTPUT);
+  pinMode(in3_27, OUTPUT);
+  pinMode(enA_27, OUTPUT);
+  pinMode(enB_27, OUTPUT);
+
+  //U30
+  pinMode(in1_30, OUTPUT);
+  pinMode(in2_30, OUTPUT);
+  pinMode(in3_30, OUTPUT);
+  pinMode(enA_30, OUTPUT);
+  pinMode(enB_30, OUTPUT);
+
+  //U31
+  pinMode(in1_31, OUTPUT);
+  pinMode(in2_31, OUTPUT);
+  pinMode(in3_31, OUTPUT);
+  pinMode(enA_31, OUTPUT);
+  pinMode(enB_31, OUTPUT);
+
+  //Water Flow Sensor
+  pinMode(WaterFlow, INPUT);
+
+  //RTC DS1302
+  Rtc.Begin();
+  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+  printDateTime(compiled);
+  Serial3.println();
+
+  if (!Rtc.IsDateTimeValid()) {
+    // Common Causes:
+    //    1) first time you ran and the device wasn't running yet
+    //    2) the battery on the device is low or even missing
+
+    Serial3.println("RTC lost confidence in the DateTime!");
+    Rtc.SetDateTime(compiled);
+  }
+
+  if (Rtc.GetIsWriteProtected()) {
+    Serial3.println("RTC was write protected, enabling writing now");
+    Rtc.SetIsWriteProtected(false);
+  }
+
+  if (!Rtc.GetIsRunning()) {
+    Serial3.println("RTC was not actively running, starting now");
+    Rtc.SetIsRunning(true);
+  }
+
+  RtcDateTime now = Rtc.GetDateTime();
+  if (now < compiled) {
+    Serial3.println("RTC is older than compile time!  (Updating DateTime)");
+    Rtc.SetDateTime(compiled);
+  } else if (now > compiled) {
+    Serial3.println("RTC is newer than compile time. (this is expected)");
+  } else if (now == compiled) {
+    Serial3.println("RTC is the same as compile time! (not expected but all is fine)");
+  }
+
+  previousDay = now.Day();
+  start_day = now.Day();
+
+  Serial.println("Starting in 1");
+  delay(1000);
+  hydro_start();
+}
+
+void loop() {
+  calculateAllSensors();
+  if (now.Minute() % 10 == 0) sendSensorValues(); //send Sensor every 10 minutes
+  if (now.Hour() % 4 == 0) sendStatusToOrangePi(); //send status/notification every 4 hours
+  
+  checkHealth();
+
+  //Read from Orange Pi
+  //Expected Input
+  //<mode, health, ppm lower threshold (int), ppm upper threshold (int), pH lower threshold (float), pH upper threshold (float)>
+  //<O, H, 600, 750, 5.5, 6.5>
+  recvWithStartEndMarkers();
+  if (newData == true) {
+    // this temporary copy is necessary to protect the original data
+    // because strtok() used in parseData() replaces the commas with \0
+    strcpy(tempChars, receivedChars);
+    parseData();
+    processParsedData();
+    newData = false;
+  } else {
+    //default values
+    mode = 'O';
+    health = 'H';
+    ppm_lower_threshold = 600;
+    ppm_upper_threshold = 850;
+    pH_lower_threshold = 5.5;
+    pH_upper_threshold = 6.5;
+  }
+
+  if (start_day - now.Day() == 21) {
+    //Send to OrangePi
+    //Hey Grower! Time to Harvest
+    Serial3.println("h");
+  }
+} //end loop
+
+/** HEALTH CHECKER **/
+void checkHealth(){
+  Serial.println("Checking health status.");
+  switch (health) {
+    case 'T':
+      // Tipburn (Calcium) is detected
+      // Lower the lights by 10%
+      percent = (10 * light_pwm) / 100;
+      light_pwm = light_pwm - percent;
+      if (light_pwm <= 0) {
+        light_pwm = 255;
+      }
+      if (light_pwm >= 255) {
+        light_pwm = 255;
+      }
+      //Turn Lights ON
+      analogWrite(lights, light_pwm);
+
+      //stabilize temp
+      stabilizeTemp();
+      stabilizePH();
+      break;
+    case 'B':
+      // Brown Spots (Boron Toxicity)  is detected
+      // Turn on water pump P1 to add 1L water
+      refillWater(brown_spot_delay_add_one_L_water);
+      //add solution A  - 0.5ml
+      addSol_A(nutsol_delay_titration);
+      controlPropeller(1);
+      //Adjust PH
+      stabilizePH();
+      break;
+    case 'Y':
+      //Yellowing & Wilting (Nitrogen) is detected
+      //Add 0.5 ml of Nutrient B
+      addSol_B(nutsol_delay_titration);
+      controlPropeller(1);
+      //stabilize PPM
+      stabilizePPM();
+      //Adjust PH
+      stabilizePH();
+      break;
+    case 'N':
+      //Gray White Spots is detected
+      //Increase Fans Speed
+      //Increase fans speed
+      stabilizeTemp();
+      break;
+    case 'H': //healthy
+      break;
+    case 'R': //reset
+      mode = 'O';
+      health = 'H';
+      ppm_lower_threshold = 600;
+      ppm_upper_threshold = 850;
+      pH_lower_threshold = 5.5;
+      pH_upper_threshold = 6.5;
+      break;
+    default:
+      ode = 'O';
+      health = 'H';
+      ppm_lower_threshold = 600;
+      ppm_upper_threshold = 850;
+      pH_lower_threshold = 5.5;
+      pH_upper_threshold = 6.5;
+      break;
+  }
+}
+/** SEND AND RECEIVE TO ORANGE PI **/
+void calculateAllSensors(){
+  Serial.println("Calculating all sensors.");
+  temperature = getTemperature();
+  humidity = getHumidity();
+  ppm = GetTDS();
+  pH = GetpH();
+  NutSolLevel = main_res_calculate()
+  water_reservoir_Level = water_res_calculate();
+  Nutrient_A_Notify_Level = solution_a_calculate();
+  Nutrient_B_Notify_Level = solution_b_calculate();
+  pH_up_Notify_Level = ph_up_calculate();
+  pH_down_Notify_Level = ph_down_calculate();
+}
+void sendStatusToOrangePi(){
+  Serial.println("Send status/notification to orange pi.");
+  //a Check Water FLow
+  if (getWaterFlow() <= 0) {
+    //Send to Orange Pi
+    //Water Flow Not Detected
+    Serial3.println("c");
+  }
+  //b Check PPM
+  ppm = GetTDS();
+  if (!(ppm > ppm_lower_threshold)) {
+    if (!(ppm < ppm_upper_threshold)) {
+      //Send to Orange Pi
+      Serial3.println("PPM not in desired range");
+    }
+  }
+  //c Check pH
+  pH = GetpH();
+  if (!(pH > pH_lower_threshold)) {
+    if (!(pH < pH_upper_threshold)) {
+      //Send to Orange Pi
+      Serial3.println("pH not in desired range");
+    }
+  }
+  //e Check Humidity
+  humidity = getHumidity();
+  if (!(humidity > humidity_lower_threshold)) {
+    if (!(humidity < humidity_upper_threshold)) {
+      //Send to Orange Pi
+      Serial3.println("Humidity not in desired range");
+    }
+  }
+  //f Check temperature
+  temperature = getTemperature();
+  if (temperature > temperature_threshold) {
+    //Send to Orange Pi
+    Serial3.println("Temperature not in desired range");
+  }
+}
+void sendSensorValues(){
+  Serial.println("Sending sensor values.");
+  //Send Sensor Values to Orange Pin
+  Serial3.print("Temp ");
+  Serial3.print(temperature);
+  Serial3.print(",");
+  Serial3.print("Humidity ");
+  Serial3.print(humidity);
+  Serial3.print(",");
+  Serial3.print("PPM ");
+  Serial3.print(ppm);
+  Serial3.print(",");
+  Serial3.print("pH ");
+  Serial3.print(pH);
+  Serial3.print(",");
+  Serial3.print("Flow ");
+  Serial3.print(getWaterFlow());
+  Serial3.print(",");
+  Serial3.print("lux ");
+  Serial3.print(0);
+  Serial3.print(",");
+  Serial3.print("NutSol Level ");
+  Serial3.print(NutSolLevel);
+  Serial3.print(",");
+  Serial3.print("Water Reservoir Level ");
+  Serial3.print(water_reservoir_Level);
+  Serial3.print(",");
+  Serial3.print("Nut A Level ");
+  Serial3.print(Nutrient_A_Notify_Level);
+  Serial3.print(",");
+  Serial3.print("Nut B Level ");
+  Serial3.print(Nutrient_B_Notify_Level);
+  Serial3.print(",");
+  Serial3.print("pH up Level ");
+  Serial3.print(pH_up_Notify_Level);
+  Serial3.print(",");
+  Serial3.print("pH down Level ");
+  Serial3.print(pH_down_Notify_Level);
+  Serial3.println(); 
+}
+/*------------------------------- **/
+
 
 /** ULTRASONIC MEASUREMENTS **/
   //these area the measurements using ultrasonic
@@ -415,160 +730,15 @@ unsigned long cloopTime;
 
 //**********************************
 
-void setup() {
-  //Start Serial
-  Serial.begin(9600);
-  Serial3.begin(9600);  //Connection to Orange Pi
-
-  Wire.begin();
-  //Initialise BH1750
-  //GY302.begin();
-  //Setup Ultrasonic sensors
-  //U6
-  pinMode(trigPin6, OUTPUT);
-  pinMode(echoPin6, INPUT);
-  //U9
-  pinMode(trigPin9, OUTPUT);
-  pinMode(echoPin9, INPUT);
-  //U8
-  pinMode(trigPin8, OUTPUT);
-  pinMode(echoPin8, INPUT);
-  //U11
-  pinMode(trigPin11, OUTPUT);
-  pinMode(echoPin11, INPUT);
-  //U12
-  pinMode(trigPin12, OUTPUT);
-  pinMode(echoPin12, INPUT);
-  //U10
-  pinMode(trigPin10, OUTPUT);
-  pinMode(echoPin10, INPUT);
-
-  //TDS
-  pinMode(TdsSensorPin, INPUT);
-
-  //Actuators
-  //Light
-  pinMode(lights, OUTPUT);
-  //Solenoids
-  //pinMode(solenoid24, OUTPUT);
-  //pinMode(solenoid35, OUTPUT);
-  pinMode(solenoid36, OUTPUT);
-
-  //Motor Driver
-  //U28
-  pinMode(in1_28, OUTPUT);
-  pinMode(in2_28, OUTPUT);
-  pinMode(in3_28, OUTPUT);
-  pinMode(in4_28, OUTPUT);
-  pinMode(enA_28, OUTPUT);
-  pinMode(enB_28, OUTPUT);
-
-  //U27
-  pinMode(in1_27, OUTPUT);
-  pinMode(in2_27, OUTPUT);
-  pinMode(in3_27, OUTPUT);
-  pinMode(enA_27, OUTPUT);
-  pinMode(enB_27, OUTPUT);
-
-  //U30
-  pinMode(in1_30, OUTPUT);
-  pinMode(in2_30, OUTPUT);
-  pinMode(in3_30, OUTPUT);
-  pinMode(enA_30, OUTPUT);
-  pinMode(enB_30, OUTPUT);
-
-  //U31
-  pinMode(in1_31, OUTPUT);
-  pinMode(in2_31, OUTPUT);
-  pinMode(in3_31, OUTPUT);
-  pinMode(enA_31, OUTPUT);
-  pinMode(enB_31, OUTPUT);
-
-  //Water Flow Sensor
-  pinMode(WaterFlow, INPUT);
-
-  //RTC DS1302
-  Rtc.Begin();
-  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
-  printDateTime(compiled);
-  Serial3.println();
-
-  if (!Rtc.IsDateTimeValid()) {
-    // Common Causes:
-    //    1) first time you ran and the device wasn't running yet
-    //    2) the battery on the device is low or even missing
-
-    Serial3.println("RTC lost confidence in the DateTime!");
-    Rtc.SetDateTime(compiled);
-  }
-
-  if (Rtc.GetIsWriteProtected()) {
-    Serial3.println("RTC was write protected, enabling writing now");
-    Rtc.SetIsWriteProtected(false);
-  }
-
-  if (!Rtc.GetIsRunning()) {
-    Serial3.println("RTC was not actively running, starting now");
-    Rtc.SetIsRunning(true);
-  }
-
-  RtcDateTime now = Rtc.GetDateTime();
-  if (now < compiled) {
-    Serial3.println("RTC is older than compile time!  (Updating DateTime)");
-    Rtc.SetDateTime(compiled);
-  } else if (now > compiled) {
-    Serial3.println("RTC is newer than compile time. (this is expected)");
-  } else if (now == compiled) {
-    Serial3.println("RTC is the same as compile time! (not expected but all is fine)");
-  }
-
-  previousDay = now.Day();
-  start_day = now.Day();
-
-
-
-
-  //***************************************************
-
-  //  analogWrite(lights, light_pwm); 
-  //analogWrite(lights, 255);
-  //pump(in1_27,in2_27,en _27,1); //fans
-  //controlMainPump(1);
-  
-  /**MAIN RESERVOIR CALIBRATION
-  for(int i=50; i<=50; i++){
-    Serial.print("Adding water for ");
-    Serial.print(i);
-    Serial.println("liters");
-
-    refillAndMistingSol(1);
-    pump(in1_28,in2_28,enA_28,1); //water pump`
-    delay(31000); // 31,000 ms = 31 = seconds = 1 liter 
-    pump(in1_28,in2_28,enA_28,0);
-    refillAndMistingSol(0);
-
-
-    //Reading Distance
-    Serial.print("Reading distance for ");
-    Serial.print(i);
-    Serial.println("liters");
-
-    Serial.println("The distance for ");
-    Serial.print(i);
-    ultrasonicFilter(trigPin10,echoPin10);  
-  }
-  **/
-  //controlMainPump(1);
-  //delay(60000*5);
-  //analogWrite(lights, 0);
-  
-  Serial.println("Starting in 1");
-  delay(1000);
-}
-void loop() {
-}
 
 void hydro_start(){
+  Serial.println("System Starting in 3.");
+  delay(1000);
+  Serial.println("System Starting in 2.");
+  delay(1000);
+  Serial.println("System Starting in 1.");
+  delay(1000);
+  Serial.println("System has started.");
   //calculate to add water maximum of 17liters
   int maxLitersToAdd = 17;
   int mainLevel = main_res_calculate(); //current water level in main res
@@ -589,6 +759,7 @@ void hydro_start(){
 }
 
 void controlLight(int control){
+  Serial.println("Light On");
   if(control){
     analogWrite(lights, light_pwm);
   }else{
@@ -597,6 +768,7 @@ void controlLight(int control){
 }
 void stabilizePH(){
   pH = GetpH();
+  Serial.println("Stabilizing PH");
   while(pH <= pH_lower_threshold){
     controlMainPump(0);
     addPH_up(nutsol_delay_titration);
@@ -613,8 +785,9 @@ void stabilizePH(){
   }
 }
 void addNutSols(int liters){
-  //if liters = 0, then it will stabilize
+  //if liters = 0, then it will perform titration
   ppm = GetTDS();
+  Serial.println("Adding NutSols.");
   if(ppm < ppm_lower_threshold){
     if(liters == 0){
       while(ppm < ppm_lower_threshold){
@@ -641,6 +814,7 @@ void addNutSols(int liters){
 }
 void stabilizePPM(){
   ppm = GetTDS();
+  Serial.println("Stabilizing PPM.");
   while (ppm > ppm_upper_threshold){
     //ppm is more than the threshold - add water
     refillWater(0.5);
@@ -648,9 +822,11 @@ void stabilizePPM(){
     controlMainPump(1);
     ppm = GetTDS();
   }
+  if(ppm < ppm_lower_threshold) addNutSols(0);
 }
 float GetpH() {
   int measurings = 0;
+  Serial.println("Getting PH.");
   for (int i = 0; i < samples; i++) {
     measurings += analogRead(pHSensorPin);
     delay(10);
@@ -660,26 +836,31 @@ float GetpH() {
   return pH1;
 }
 void addPH_up(int time_to_delay){
+  Serial.println("Adding PH Up.");
   pump(in1_30,in2_30,enA_30,1); //turn ON ph-UP pump
   delay(time_to_delay); //Delay in ms to add X mL of pH up / 0.05mL for other
   pump(in1_30,in2_30,enA_30,0); //turn OFF ph-UP pump
 }
 void addPH_down(int time_to_delay){
+  Serial.println("Adding PH Down.");
   pump(in3_30,in4_30,enB_30,1); //turn ON ph-DOWN pump
   delay(time_to_delay); //Delay in ms to add X mL of pH Down / 0.05mL for other
   pump(in3_30,in4_30,enB_30,0); //turn OFF ph-DOWN pump
 }
 void addSol_A(int time_to_delay){
+  Serial.println("Adding Solution A.");
   pump(in1_31,in2_31,enA_31,1); 
   delay(time_to_delay);
   pump(in1_31,in2_31,enA_31,0); 
 }
 void addSol_B(int time_to_delay){
+  Serial.println("Adding Solution B.");
   pump(in3_31,in4_31,enB_31,1); 
   delay(time_to_delay);
   pump(in3_31,in4_31,enB_31,0); 
 }
 void controlMainPump(int control){
+  Serial.println("Controlling Main Pump.");
   if(control){
     //on
     pump(in3_28,in4_28,enB_28,1);
@@ -700,6 +881,7 @@ void controlMainPump(int control){
   }
 }
 void controlPropeller(int control){
+  Serial.println("Controlling Main Pump.");
   if(control){
     //on
     // !IMPORTANT - ADD FUNCTION - CHECK WATER LEVEL FIRST BEFORE TURNING ON THE PROPELLER! //
@@ -713,16 +895,23 @@ void controlPropeller(int control){
   }
 }
 void refillWater(float liters_to_add){
-  // !IMPORTANT - ADD FUNCTION - CHECK WATER LEVEL FIRST BEFORE TURNING ON THE WATER PUMP! //
+  Serial.println("Refilling water to main reservoir.");
   int secondsPerLiter = 31;
-  refillAndMistingSol(1); //refill mode
-  pump(in3_28,in4_28,enB_28,1); 
-  delay(liters_to_add * (secondsPerLiter * 1000)); 
-  pump(in3_28,in4_28,enB_28,0); 
-  refillAndMistingSol(0); //turn off solenoids
+  if(water_res_calculate() > 3 && main_res_calculate() < 30){
+    Serial.print("Refilling now.");
+    refillAndMistingSol(1); //refill mode
+    pump(in3_28,in4_28,enB_28,1); 
+    delay(liters_to_add * (secondsPerLiter * 1000)); 
+    pump(in3_28,in4_28,enB_28,0); 
+    refillAndMistingSol(0); //turn off solenoids
+    Serial.print("Done refilling.");
+  }else{
+    Serial.print("Warning cannot refill it could be water reservoir is lacking water or main reservoir is at maximum volume.");
+  }
 }
 
 void checkTemp(){
+  Serial.println("Checking temperature.");
   float temp = getTemperature();
   while(temp > temperature_threshold){
     //Increase Speed of fans F1 and F2
@@ -736,6 +925,7 @@ void checkTemp(){
   }
 }
 void fans(int control){
+  Serial.println("Controlling fans.");
   switch(control){
     case 0:
       //turn off
@@ -756,6 +946,7 @@ void fans(int control){
   }
 }
 float GetTDS() {
+  Serial.println("Getting PPM.");
   delay(5000);
   bool b = true;
   while (b) {
@@ -794,6 +985,7 @@ float GetTDS() {
 
 bool mist_control = true;
 void turnOnMist(){
+  Serial.println("Turning on Mist.");
   if(mist_control){
     refillAndMistingSol(2);
     pump(in1_28,in2_28,enA_28,1); 
@@ -808,17 +1000,20 @@ void turnOnMist(){
   }
 }
 void stabilizeHum(){
+  Serial.println("Stabilizing humidity.");
+  int maxIteration = 5;
   bool hum = false;
   humidity = getHumidity();
   fans(2);
   Serial.print("Humidity: ");
   Serial.println(getHumidity());
-  while(humidity > humidity_upper_threshold){
+  while(humidity > humidity_upper_threshold && maxIteration > 0){
     Serial.print("Stabilizing humidity: ");
     Serial.println(humidity);
     fans(1);
     delay(5000);
     humidity = getHumidity();
+    maxIteration--;
   }
   if(humidity > humidity_lower_threshold && mist_control){
     Serial.print("Stabilizing humidity: ");
@@ -834,27 +1029,141 @@ void stabilizeHum(){
   Serial.println(getHumidity());
 }
 void stabilizeTemp(){
+  Serial.println("Stabilizing temperature.");
+  int maxIteration = 5;
   temperature = getTemperature();
-  while(temperature > temperature_threshold){
+  while(temperature > temperature_threshold && maxIteration > 0){
     Serial.print("Stabilizing Temperature: ");
     Serial.print(temperature);
     Serial.println(" *C ");
     fans(1);
     delay(5000);
     temperature = getTemperature();
+    maxIteration--;
   }
 }
 float getHumidity() {
+  Serial.println("Getting humidity.");
   float chk = DHT.read11(dhtPin);
   float humidity = DHT.humidity;
   return humidity;
 }
 float getTemperature() {
+  Serial.println("Getting temperature.");
   float chk = DHT.read11(dhtPin);
   float temperature = DHT.temperature;
   return temperature;
 }
 void shutdownArduino() {
+  Serial.println("Arduino shutdown.");
   wdt_enable(WDTO_15MS);  // Enable the Watchdog Timer with a short timeout
   while (1);  // Wait for the Watchdog Timer to reset the Arduino
+}
+void recvWithStartEndMarkers() {
+  static boolean recvInProgress = false;
+  static byte ndx = 0;
+  char startMarker = '<';
+  char endMarker = '>';
+  char rc;
+
+  while (Serial3.available() > 0 && newData == false) {
+    rc = Serial3.read();
+
+    if (recvInProgress == true) {
+      if (rc != endMarker) {
+        receivedChars[ndx] = rc;
+        ndx++;
+        if (ndx >= numChars) {
+          ndx = numChars - 1;
+        }
+      } else {
+        receivedChars[ndx] = '\0';  // terminate the string
+        recvInProgress = false;
+        ndx = 0;
+        newData = true;
+      }
+    }
+
+    else if (rc == startMarker) {
+      recvInProgress = true;
+    }
+  }
+}
+
+//============
+
+//<mode, health, ppm lower threshold (int), ppm upper threshold (int), pH lower threshold (float), pH upper threshold (float)>
+//<O, H, 400, 450, 5.5, 6.5>
+void parseData() {  // split the data into its parts
+
+  char* strtokIndx;  // this is used by strtok() as an index
+
+  //mode
+  strtokIndx = strtok(tempChars, ",");   // get the first part - the string
+  strcpy(modeFromOrangePi, strtokIndx);  // copy it to modeFromOrangePi
+
+  //health
+  strtokIndx = strtok(tempChars, ",");     // get the first part - the string
+  strcpy(healthFromOrangePi, strtokIndx);  // copy it to healthFromOrangePi
+
+  //ppm lower threshold
+  strtokIndx = strtok(NULL, ",");                    // this continues where the previous call left off
+  ppmlowerthresholdFromOrangePi = atoi(strtokIndx);  // convert this part to an integer
+
+  //ppm upper threshold
+  strtokIndx = strtok(NULL, ",");                    // this continues where the previous call left off
+  ppmupperthresholdFromOrangePi = atoi(strtokIndx);  // convert this part to an integer
+
+  //pH lower threshold
+  strtokIndx = strtok(NULL, ",");
+  pHlowerthresholdFromOrangePi = atof(strtokIndx);  // convert this part to a float
+
+  //pH upper threshold
+  strtokIndx = strtok(NULL, ",");
+  pHupperthresholdFromOrangePi = atof(strtokIndx);  // convert this part to a float
+}
+
+//============
+
+void processParsedData() {
+  mode = modeFromOrangePi;
+  health = healthFromOrangePi;
+  ppm_lower_threshold = ppmlowerthresholdFromOrangePi;
+  ppm_upper_threshold = ppmupperthresholdFromOrangePi;
+  pH_lower_threshold = pHlowerthresholdFromOrangePi;
+  pH_upper_threshold = pHupperthresholdFromOrangePi;
+}
+
+void res_calibration(){
+  //***************************************************
+  //  analogWrite(lights, light_pwm); 
+  //analogWrite(lights, 255);
+  //pump(in1_27,in2_27,en _27,1); //fans
+  //controlMainPump(1);
+  
+  /**MAIN RESERVOIR CALIBRATION**/
+  for(int i=50; i<=50; i++){
+    Serial.print("Adding water for ");
+    Serial.print(i);
+    Serial.println("liters");
+
+    refillAndMistingSol(1);
+    pump(in1_28,in2_28,enA_28,1); //water pump`
+    delay(31000); // 31,000 ms = 31 = seconds = 1 liter 
+    pump(in1_28,in2_28,enA_28,0);
+    refillAndMistingSol(0);
+
+
+    //Reading Distance
+    Serial.print("Reading distance for ");
+    Serial.print(i);
+    Serial.println("liters");
+
+    Serial.println("The distance for ");
+    Serial.print(i);
+    ultrasonicFilter(trigPin10,echoPin10);  
+  }
+  controlMainPump(1);
+  delay(60000*5);
+  analogWrite(lights, 0);
 }

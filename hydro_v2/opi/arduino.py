@@ -36,35 +36,42 @@ def receive_data_from_arduino():
         try:
             #*********** uncomment this below line*************
             data = ser.readline().decode().strip()
-            print("Command received from arduino: ", data)
-            if len(data) == 1:
-                send_notification({
-                    'notification_type' : receive_codes[data]
-                })
-            else:
-                temp = data.split(',')
-                if len(temp) > 1:
-                    payload = {
-                        'temperature_value': temp[0],
-                        'humidity_value': temp[1],
-                        'ppm_value': temp[2],
-                        'ph_value': temp[3],
-                        'water_flow_value': temp[4],
-                        'lux_value': temp[5],
-                        'nutsol_reservoir_level': temp[6],
-                        'water_reservoir_Level': temp[7],
-                        'nutrient_a_value': temp[8],
-                        'nutrient_b_value': temp[9],
-                        'ph_up_value': temp[10],
-                        'ph_down_value': temp[11]
-                    }
-                    set_variables(payload)
-            except Exception as e :
-                 print(f"Error receiving data from Arduino: {e}")
+            if len(data)!=0:
+                print("Command received from arduino: ", data)
+                if len(data) == 1:
+                    send_notification({
+                        'notification_type' : receive_codes[data]
+                    })
+                else:
+                    temp = data.split(',')
+                    if len(temp) > 1:
+                        payload = {
+                            'temperature_value': temp[0],
+                            'humidity_value': temp[1],
+                            'ppm_value': temp[2],
+                            'ph_value': temp[3],
+                            'water_flow_value': temp[4],
+                            'lux_value': temp[5],
+                            'nutsol_reservoir_level': temp[6],
+                            'water_reservoir_Level': temp[7],
+                            'nutrient_a_value': temp[8],
+                            'nutrient_b_value': temp[9],
+                            'ph_up_value': temp[10],
+                            'ph_down_value': temp[11]
+                        }
+                        set_variables(payload)
+        except Exception as e :
+            print(f"Error receiving data from Arduino: {e}")
                 
 def start_serial_comm():
+    send_thread = threading.Thread(target=send_data)
     receive_thread = threading.Thread(target=receive_data_from_arduino)
+
+    send_thread.start()
     receive_thread.start()
+
+    send_thread.join()
+    receive_thread.join()
 
 client = mqtt.Client()
 client.username_pw_set("dqjzgogh", "bhZjcIOCcqWP")  # replace with your CloudMQTT username and password

@@ -16,7 +16,6 @@
 	int getLightIntensity();
 	float getWaterFlow();
 
-  void refillAndMistingSol(int control);
   void pump(int in1, int in2, int en, bool control);
   float ultrasonicFilter(int trigPin, int echoPin);
   float calculateAverage(int numReadings, float readings[]);

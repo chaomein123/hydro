@@ -61,33 +61,7 @@ int getMedianNum(int bArray[], int iFilterLen) {
   }
   return bTemp;
 }
-void refillAndMistingSol(int control){
-  //1-refill 2-misting 3-off
-  switch(control){
-    case 0:
-      //turn OFF ALL
-      digitalWrite(solenoid24, LOW);
-      digitalWrite(solenoid35, LOW);
-      break;
-    case 1:
-      //turn on REFILL
-      digitalWrite(solenoid24, HIGH);
-      digitalWrite(solenoid35, LOW);
-      break;
-    case 2:
-      //turn on MISTING
-      digitalWrite(solenoid24, LOW);
-      digitalWrite(solenoid35, HIGH);
-      break;
-    default:
-      //turn OFF ALL
-      digitalWrite(solenoid24, LOW);
-      digitalWrite(solenoid35, LOW);
-      Serial.println("Error: Wrong parameters for solenoid refill and misting sol.");
-      break;
 
-  }
-}
 
 void pump(int in1, int in2, int en, bool control){
   // Turn on water pump P1

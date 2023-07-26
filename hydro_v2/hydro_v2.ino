@@ -86,13 +86,6 @@ RtcDS1302<ThreeWire> Rtc(myWire);
 
 //Define Actuators
 
-//Solenoid Valves
-
-//U35  Close for Refilling, Open for Misting
-#define solenoid35 34
-//U36
-#define solenoid36 30
-
 //LED Light
 #define lights 10
 
@@ -130,9 +123,9 @@ RtcDS1302<ThreeWire> Rtc(myWire);
 //Solenoid Valves
 //U24 Close for misting, Open for Refilling
 //U35  Close for Refilling, Open for Misting
-#define solenoid35 34
+#define solenoid24 13
 //U36
-#define solenoid36 30
+#define solenoid35 12
 
 //LED Light
 #define lights 10
@@ -196,6 +189,7 @@ const int echoPin10 = 49;
 //NutSolReservoir Level
 int NutSol_lower_threshold = 0;
 int NutSol_upper_threshold = 73;
+int NutSolLevel = 0;
 
 //TDS Thresholds
 int ppm_lower_threshold = 600;
@@ -283,7 +277,7 @@ unsigned long cloopTime;
 
 void setup() {
   //Start Serial
-  Serial.begin(9600);
+  Serial.begin(4800);
   Serial3.begin(9600);  //Connection to Orange Pi
 
   Wire.begin();
@@ -316,9 +310,9 @@ void setup() {
   //Light
   pinMode(lights, OUTPUT);
   //Solenoids
-  //pinMode(solenoid24, OUTPUT);
-  //pinMode(solenoid35, OUTPUT);
-  pinMode(solenoid36, OUTPUT);
+  pinMode(solenoid24, OUTPUT);
+  pinMode(solenoid35, OUTPUT);
+  //pinMode(solenoid36, OUTPUT);
 
   //Motor Driver
   //U28
@@ -357,54 +351,66 @@ void setup() {
   Rtc.Begin();
   RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
   printDateTime(compiled);
-  Serial3.println();
+  Serial.println();
 
   if (!Rtc.IsDateTimeValid()) {
     // Common Causes:
     //    1) first time you ran and the device wasn't running yet
     //    2) the battery on the device is low or even missing
 
-    Serial3.println("RTC lost confidence in the DateTime!");
+    Serial.println("RTC lost confidence in the DateTime!");
     Rtc.SetDateTime(compiled);
   }
 
   if (Rtc.GetIsWriteProtected()) {
-    Serial3.println("RTC was write protected, enabling writing now");
+    Serial.println("RTC was write protected, enabling writing now");
     Rtc.SetIsWriteProtected(false);
   }
 
   if (!Rtc.GetIsRunning()) {
-    Serial3.println("RTC was not actively running, starting now");
+    Serial.println("RTC was not actively running, starting now");
     Rtc.SetIsRunning(true);
   }
 
   RtcDateTime now = Rtc.GetDateTime();
   if (now < compiled) {
-    Serial3.println("RTC is older than compile time!  (Updating DateTime)");
+    Serial.println("RTC is older than compile time!  (Updating DateTime)");
     Rtc.SetDateTime(compiled);
   } else if (now > compiled) {
-    Serial3.println("RTC is newer than compile time. (this is expected)");
+    Serial.println("RTC is newer than compile time. (this is expected)");
   } else if (now == compiled) {
-    Serial3.println("RTC is the same as compile time! (not expected but all is fine)");
+    Serial.println("RTC is the same as compile time! (not expected but all is fine)");
   }
 
   previousDay = now.Day();
   start_day = now.Day();
-
-  Serial.println("Starting in 1");
-  delay(1000);
-  hydro_start();
 }
 
+bool start = false;
 void loop() {
   // Program Logic
   RtcDateTime now = Rtc.GetDateTime();
 
-  calculateAllSensors();
-  if (now.Minute() % 10 == 0) sendSensorValues(); //send Sensor every 10 minutes
-  if (now.Hour() % 4 == 0) sendStatusToOrangePi(); //send status/notification every 4 hours
-  
-  checkHealth();
+  if(start){
+    calculateAllSensors();
+    if (now.Minute() % 10 == 0) sendSensorValues(); //send Sensor every 10 minutes
+    if (now.Hour() % 4 == 0) sendStatusToOrangePi(); //send status/notification every 4 hours
+  }
+  if(Serial3.available() > 0){
+    char receivedChar = Serial3.read();
+    if(receivedChar == 'S' && !start){
+      start = true; // system has been started
+      hydro_start();
+    }else if(receivedChar == 'R' && start){
+      hydro_start();
+    }else{
+      //check for health
+      if(start){
+        health = receivedChar;
+        checkHealth();
+      }
+    }
+  }
 
   //Read from Orange Pi
   //Expected Input
@@ -433,7 +439,9 @@ void loop() {
     //Hey Grower! Time to Harvest
     Serial3.println("h");
   }
+  
 } //end loop
+
 
 /** HEALTH CHECKER **/
 void checkHealth(){
@@ -494,7 +502,7 @@ void checkHealth(){
       pH_upper_threshold = 6.5;
       break;
     default:
-      ode = 'O';
+      mode = 'O';
       health = 'H';
       ppm_lower_threshold = 600;
       ppm_upper_threshold = 850;
@@ -510,7 +518,7 @@ void calculateAllSensors(){
   humidity = getHumidity();
   ppm = GetTDS();
   pH = GetpH();
-  NutSolLevel = main_res_calculate()
+  NutSolLevel = main_res_calculate();
   water_reservoir_Level = water_res_calculate();
   Nutrient_A_Notify_Level = solution_a_calculate();
   Nutrient_B_Notify_Level = solution_b_calculate();
@@ -774,6 +782,7 @@ void hydro_start(){
   controlLight(1);
   stabilizeHum();
   stabilizeTemp();
+  Serial.println("System is already working.");
 }
 
 void controlLight(int control){
@@ -847,7 +856,7 @@ float GetpH() {
   Serial.println("Getting PH.");
   for (int i = 0; i < samples; i++) {
     measurings += analogRead(pHSensorPin);
-    delay(10);
+    delay(1000);
   }
   float volt = 5 / adc_resolution * measurings / samples;
   float pH1 = 7 + ((2.5 - volt) / 0.18);
@@ -882,14 +891,13 @@ void controlMainPump(int control){
   if(control){
     //on
     pump(in3_28,in4_28,enB_28,1);
-    delay(10000); // wait for 10 seconds to allow the water to flow to the waterflow sensor
+    delay(30000); // wait for 30 seconds to allow the water to flow to the waterflow sensor
     if(getWaterFlow() <= 0){
       //send to orange pi
       // no water flowing
-      pump(in3_28,in4_28,enB_28,0);
+      //pump(in3_28,in4_28,enB_28,0);
       Serial3.println("c"); // send to orange pi
       Serial.println("Warning no waterflow. Check the system especially the pump!");
-      shutdownArduino(); //shutdown arduino
     }else{
       //water is circulating = good
       Serial.println("Water pump is working");
@@ -1004,11 +1012,11 @@ float GetTDS() {
 
 bool mist_control = true;
 void turnOnMist(){
-  Serial.println("Turning on Mist.");
+  /**Serial.println("Turning on Mist.");
   if(mist_control){
     refillAndMistingSol(2);
     pump(in1_28,in2_28,enA_28,1); 
-    delay(3000); 
+    delay(30000); 
     pump(in1_28,in2_28,enA_28,0); 
     refillAndMistingSol(0);
     mist_control = false;
@@ -1016,7 +1024,7 @@ void turnOnMist(){
     pump(in1_28,in2_28,enA_28,0); 
     refillAndMistingSol(0);
     Serial.print("Warning: Cannot turn on mist since it has been turned on.");
-  }
+  }**/
 }
 void stabilizeHum(){
   Serial.println("Stabilizing humidity.");
@@ -1185,4 +1193,36 @@ void res_calibration(){
   controlMainPump(1);
   delay(60000*5);
   analogWrite(lights, 0);
+}
+
+void refillAndMistingSol(int control){
+  //1-refill 2-misting 3-off
+  switch(control){
+    case 0:
+      //turn OFF ALL
+      digitalWrite(solenoid24, LOW);
+      digitalWrite(solenoid35, LOW);
+      break;
+    case 1:
+      //turn on REFILL
+      digitalWrite(solenoid24, HIGH);
+      digitalWrite(solenoid35, LOW);
+      break;
+    case 2:
+      //turn on MISTING
+      digitalWrite(solenoid24, LOW);
+      digitalWrite(solenoid35, HIGH);
+      break;
+    case 3:
+      //turn on MISTING
+      digitalWrite(solenoid24, HIGH);
+      digitalWrite(solenoid35, HIGH);
+      break;
+    default:
+      //turn OFF ALL
+      digitalWrite(solenoid24, LOW);
+      digitalWrite(solenoid35, LOW);
+      Serial.println("Error: Wrong parameters for solenoid refill and misting sol.");
+      break;
+  }
 }

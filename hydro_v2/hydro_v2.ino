@@ -277,8 +277,8 @@ unsigned long cloopTime;
 
 void setup() {
   //Start Serial
-  Serial.begin(4800);
-  Serial3.begin(9600);  //Connection to Orange Pi
+  Serial.begin(4800); // monitoring 
+  Serial3.begin(9600);  //Connection to Orange Pi - UART
 
   Wire.begin();
   //Initialise BH1750
@@ -384,6 +384,8 @@ void setup() {
 
   previousDay = now.Day();
   start_day = now.Day();
+
+  //CODE BELOW
 }
 
 bool start = false;
@@ -395,6 +397,10 @@ void loop() {
     calculateAllSensors();
     if (now.Minute() % 10 == 0) sendSensorValues(); //send Sensor every 10 minutes
     if (now.Hour() % 4 == 0) sendStatusToOrangePi(); //send status/notification every 4 hours
+
+    controlLight(1);
+    controlMainPump(1);
+    fans(1);
   }
   if(Serial3.available() > 0){
     char receivedChar = Serial3.read();
@@ -410,28 +416,6 @@ void loop() {
         checkHealth();
       }
     }
-  }
-
-  //Read from Orange Pi
-  //Expected Input
-  //<mode, health, ppm lower threshold (int), ppm upper threshold (int), pH lower threshold (float), pH upper threshold (float)>
-  //<O, H, 600, 750, 5.5, 6.5>
-  recvWithStartEndMarkers();
-  if (newData == true) {
-    // this temporary copy is necessary to protect the original data
-    // because strtok() used in parseData() replaces the commas with \0
-    strcpy(tempChars, receivedChars);
-    parseData();
-    processParsedData();
-    newData = false;
-  } else {
-    //default values
-    mode = 'O';
-    health = 'H';
-    ppm_lower_threshold = 600;
-    ppm_upper_threshold = 850;
-    pH_lower_threshold = 5.5;
-    pH_upper_threshold = 6.5;
   }
 
   if (start_day - now.Day() == 21) {
@@ -790,7 +774,7 @@ void controlLight(int control){
   if(control){
     analogWrite(lights, light_pwm);
   }else{
-    analogWrite(lights, 50);
+    analogWrite(lights, 150);
   }
 }
 void stabilizePH(){
@@ -828,7 +812,7 @@ void addNutSols(int liters){
       }
     }else if(liters > 0){
       controlMainPump(0);
-      addSol_A(nutsol_delay * liters);
+      addSol_A(nutsol_delay * liters); //nutsol_delay - 1.5ml x liters
       controlPropeller(1);
       addSol_B(nutsol_delay * liters);
       controlPropeller(1);
@@ -1081,11 +1065,7 @@ float getTemperature() {
   float temperature = DHT.temperature;
   return temperature;
 }
-void shutdownArduino() {
-  Serial.println("Arduino shutdown.");
-  wdt_enable(WDTO_15MS);  // Enable the Watchdog Timer with a short timeout
-  while (1);  // Wait for the Watchdog Timer to reset the Arduino
-}
+
 void recvWithStartEndMarkers() {
   static boolean recvInProgress = false;
   static byte ndx = 0;
